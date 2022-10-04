@@ -62,6 +62,46 @@
 #define RAS P5_4
 #define CAS P5_5
 
+#define REFRESH_FREQUENCY      1000000
+#define REFRESH_TIMER_PRIORITY 3
+
+cyhal_timer_t refresh_timer;
+
+static void refresh();
+
+static void
+isr_refresh(void *callback_arg, cyhal_timer_event_t event)
+{
+  refresh();
+}
+
+static void
+initialize_refresh_timer()
+{
+    const cyhal_timer_cfg_t refresh_timer_cfg =
+    {
+        .compare_value = 0,                 /* Timer compare value, not used */
+        .period = 9999,                     /* Defines the timer period */
+        .direction = CYHAL_TIMER_DIR_UP,    /* Timer counts up */
+        .is_compare = false,                /* Don't use compare mode */
+        .is_continuous = true,              /* Run the timer indefinitely */
+        .value = 0                          /* Initial value of counter */
+    };
+
+    cy_rslt_t rslt = cyhal_timer_init(&refresh_timer, NC, NULL);
+    CY_ASSERT(rslt == CY_RSLT_SUCCESS);
+    cyhal_timer_configure(&refresh_timer, &refresh_timer_cfg);
+    CY_ASSERT(rslt == CY_RSLT_SUCCESS);
+    cyhal_timer_set_frequency(&refresh_timer, REFRESH_FREQUENCY);
+    CY_ASSERT(rslt == CY_RSLT_SUCCESS);
+    cyhal_timer_register_callback(&refresh_timer, isr_refresh, NULL);
+    CY_ASSERT(rslt == CY_RSLT_SUCCESS);
+    cyhal_timer_enable_event(&refresh_timer, CYHAL_TIMER_IRQ_TERMINAL_COUNT, REFRESH_TIMER_PRIORITY, true);
+    CY_ASSERT(rslt == CY_RSLT_SUCCESS);
+    cyhal_timer_start(&refresh_timer);
+    CY_ASSERT(rslt == CY_RSLT_SUCCESS);
+}
+
 void
 init_hardware()
 {
@@ -101,6 +141,9 @@ init_hardware()
   cyhal_gpio_write(RAS, 1);
   cyhal_gpio_init(CAS, CYHAL_GPIO_DIR_OUTPUT, CYHAL_GPIO_DRIVE_STRONG, 0);
   cyhal_gpio_write(CAS, 1);
+
+  initialize_refresh_timer();
+
 }
 
 int
@@ -179,6 +222,16 @@ write_data(uint8_t value)
   cyhal_gpio_write(DQ4, value & 8 ? 1 : 0);
 }
 
+static void
+refresh()
+{
+  for (uint16_t row = 0; row < SIZE; row++) {
+    write_address(row);
+    cyhal_gpio_write(RAS, 0);
+    cyhal_gpio_write(RAS, 1);
+  }
+}
+
 void
 fixed_value_test(uint8_t value)
 {
@@ -188,9 +241,10 @@ fixed_value_test(uint8_t value)
   set_data_lines_to_output();
   cyhal_gpio_write(WE, 0);
   for (uint16_t row = 0; row < SIZE; row++) {
+    __disable_irq();
 #if defined(FPM)
-      write_address(row);
-      cyhal_gpio_write(RAS, 0);
+    write_address(row);
+    cyhal_gpio_write(RAS, 0);
 #endif
     for (uint16_t col = 0; col < SIZE; col++) {
       write_data(value);
@@ -208,6 +262,7 @@ fixed_value_test(uint8_t value)
 #if defined(FPM)
     cyhal_gpio_write(RAS, 1);
 #endif
+    __enable_irq();
   }
   cyhal_gpio_write(WE, 1);
 
@@ -217,6 +272,7 @@ fixed_value_test(uint8_t value)
   {
     uint8_t error = 0;
     for (uint16_t row = 0; !error && row < SIZE; row++) {
+      __disable_irq();
 #if defined(FPM)
       write_address(row);
       cyhal_gpio_write(RAS, 0);
@@ -242,6 +298,7 @@ fixed_value_test(uint8_t value)
 #if defined(FPM)
       cyhal_gpio_write(RAS, 1);
 #endif
+      __enable_irq();
     }
   }
   cyhal_gpio_write(OE, 1);
@@ -252,6 +309,8 @@ int
 main(void)
 {
   init_hardware();
+
+  cyhal_gpio_write(CYBSP_USER_LED, CYBSP_LED_STATE_ON);
 
   say("\n\n");
   say("-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-");
